@@ -3,3 +3,5 @@ vercel-kv
 requests
 anthropic
 uagents
+flask
+redis
