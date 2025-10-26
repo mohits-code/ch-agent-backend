@@ -1,13 +1,17 @@
-from flask import Flask, request, jsonify, safe_join
+from flask import Flask, request, jsonify # Correct Flask import
+from werkzeug.utils import safe_join # Correct safe_join import
 import json
-import os # Import os for path joining
+import os
 
 app = Flask(__name__)
 
 # --- Use Vercel's temporary directory ---
 # NOTE: Files written here are NOT guaranteed to persist between requests!
 TEMP_DIR = "/tmp"
+# Use safe_join to prevent path traversal issues, though less critical in /tmp
 PARAMS_FILE_PATH = safe_join(TEMP_DIR, "vr_params.json")
+# --- Use Vercel's temporary directory ---
+
 
 @app.route("/api/update-params", methods=["POST"])
 def update_params():
