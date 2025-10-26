@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify
-from vercel_kv import kv 
+from vercel_kv import KV
 import json
 
 app = Flask(__name__)
