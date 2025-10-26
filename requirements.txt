@@ -4,4 +4,6 @@ requests
 anthropic
 uagents
 flask
-redis
+python-dotenv
+firebase-admin
+gunicorn
