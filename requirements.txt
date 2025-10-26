@@ -1,2 +1,5 @@
 Flask==3.0.3
 vercel-kv
+requests
+anthropic
+uagents
