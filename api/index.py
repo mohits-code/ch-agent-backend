@@ -3,7 +3,8 @@ import json
 import os
 import base64
 import firebase_admin
-from firebase_admin import credentials, firestore  # <-- Import firestore, not db
+from firebase_admin import credentials, firestore
+from datetime import datetime
 from dotenv import load_dotenv
 
 # Load .env file for local development
@@ -15,14 +16,13 @@ app = Flask(__name__)
 # Get credentials from environment variables
 FIREBASE_KEY_BASE64 = os.environ.get("FIREBASE_SERVICE_ACCOUNT_BASE64")
 
-# We only need the service account for Firestore, not the Database URL
 firebase_initialized = False 
-db_client = None # <-- We will store the client here
+db_client = None
 
 try:
     if not FIREBASE_KEY_BASE64:
         raise ValueError("FIREBASE_SERVICE_ACCOUNT_BASE64 env var not set.")
-
+    
     # Decode the base64 service account key
     decoded_key = base64.b64decode(FIREBASE_KEY_BASE64).decode('utf-8')
     cred_dict = json.loads(decoded_key)
@@ -30,7 +30,7 @@ try:
     # Initialize credentials
     cred = credentials.Certificate(cred_dict)
     
-    # Initialize Firebase app (no databaseURL needed)
+    # Initialize Firebase app
     firebase_admin.initialize_app(cred)
     
     # Get the Firestore client
@@ -38,10 +38,8 @@ try:
     
     firebase_initialized = True
     app.logger.info("Successfully connected to Firebase Cloud Firestore.")
-
 except Exception as e:
     app.logger.critical(f"FATAL ERROR: Failed to initialize Firebase: {e}", exc_info=True)
-    # The app will still run, but firebase_initialized will remain False
 
 # --- End Firebase Setup ---
 
@@ -58,9 +56,8 @@ def update_params():
         params = request.get_json()
         if not params:
             return jsonify({"error": "No JSON payload"}), 400
-
+        
         # Get a reference to the document
-        # 'settings' is the collection, 'vr_params' is the document ID
         doc_ref = db_client.collection("settings").document("vr_params")
         
         # Set the data in that document (this overwrites)
@@ -68,10 +65,10 @@ def update_params():
         
         app.logger.info(f"Successfully wrote params to Firestore path: settings/vr_params")
         return jsonify({"success": True, "params_saved": params}), 200
-
     except Exception as e:
         app.logger.error(f"Error in update_params writing to Firestore: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/api/get-params", methods=["GET"])
 def get_params():
@@ -89,21 +86,83 @@ def get_params():
         doc = doc_ref.get()
         
         if doc.exists:
-            # If the document exists, get its data
             params = doc.to_dict()
             app.logger.info(f"Successfully read params from Firestore path: settings/vr_params")
             return jsonify(params)
         else:
-            # If the document doesn't exist
             app.logger.warning(f"Document settings/vr_params not found in Firestore, returning default.")
             default_params = {"seed": 1234, "octaves": 4, "period": 20.0, "persistence": 0.8, "status": "firestore_doc_not_found"}
             return jsonify(default_params)
-
     except Exception as e:
         app.logger.error(f"Error in get_params reading from Firestore: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
-# Your original test endpoint
+
+@app.route("/api/submit-prompt", methods=["POST"])
+def submit_prompt():
+    """
+    Receives a prompt from the frontend/user and stores it with a timestamp.
+    The agent will poll this endpoint to check for new prompts.
+    """
+    if not firebase_initialized:
+        return jsonify({"error": "Firebase connection not available"}), 503
+    
+    try:
+        data = request.get_json()
+        if not data or "prompt" not in data:
+            return jsonify({"error": "No prompt provided"}), 400
+        
+        prompt_text = data["prompt"]
+        
+        # Create a timestamp
+        timestamp = datetime.utcnow().isoformat()
+        
+        # Store in Firestore
+        doc_ref = db_client.collection("settings").document("prompt_request")
+        doc_ref.set({
+            "prompt": prompt_text,
+            "timestamp": timestamp,
+            "processed": False
+        })
+        
+        app.logger.info(f"Stored new prompt request with timestamp: {timestamp}")
+        return jsonify({"success": True, "timestamp": timestamp}), 200
+        
+    except Exception as e:
+        app.logger.error(f"Error in submit_prompt: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/get-prompt-request", methods=["GET"])
+def get_prompt_request():
+    """
+    Returns the current prompt request for the agent to poll.
+    Agent checks if timestamp has changed to know if there's a new prompt.
+    """
+    if not firebase_initialized:
+        return jsonify({"error": "Firebase connection not available"}), 503
+    
+    try:
+        # Get the prompt request document
+        doc_ref = db_client.collection("settings").document("prompt_request")
+        doc = doc_ref.get()
+        
+        if doc.exists:
+            data = doc.to_dict()
+            return jsonify(data), 200
+        else:
+            # No prompt request exists yet
+            return jsonify({}), 200
+            
+    except Exception as e:
+        app.logger.error(f"Error in get_prompt_request: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/python")
 def hello_world():
     return "<p>Hello, World!</p>"
+
+
+if __name__ == "__main__":
+    app.run(debug=True)
