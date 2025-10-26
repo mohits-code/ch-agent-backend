@@ -2,30 +2,36 @@ from flask import Flask, request, jsonify
 import json
 import os
 import redis
+from dotenv import load_dotenv # <-- Import dotenv
+
+# --- Load environment variables ---
+# This line loads variables from a .env file (if it exists)
+# This is for LOCAL DEVELOPMENT. Vercel uses its own dashboard.
+load_dotenv() 
 
 app = Flask(__name__)
 
-# --- Connect to Redis ---
-# This pulls the connection string from an environment variable.
-# Vercel KV or services like Upstash provide this URL.
+# --- Connect to Redis using Environment Variables ---
+# Get the REDIS_URL from the environment.
+# os.environ.get() will return None if the variable is not set.
 REDIS_URL = os.environ.get("REDIS_URL")
-if not REDIS_URL:
-    # Fallback for local testing (assumes Redis is running on localhost:6379)
-    # WARNING: Vercel will not use this. Set the REDIS_URL env var in Vercel.
-    REDIS_URL = "redis://localhost:6379" 
-    app.logger.warning("REDIS_URL not set, falling back to localhost.")
 
-try:
-    # Initialize the Redis client
-    # decode_responses=True automatically handles decoding from bytes to strings
-    r = redis.from_url(REDIS_URL, decode_responses=True)
-    r.ping() # Test the connection
-    app.logger.info("Successfully connected to Redis.")
-except Exception as e:
-    app.logger.error(f"Failed to connect to Redis: {e}", exc_info=True)
-    # If we can't connect, we can't really run the app.
-    # In a real app, you might have more graceful error handling.
-    r = None 
+# Initialize Redis client variable
+r = None
+
+if not REDIS_URL:
+    # If the variable is missing, log a critical error.
+    # The app can't run without it.
+    app.logger.critical("FATAL ERROR: REDIS_URL environment variable is not set.")
+else:
+    try:
+        # Connect using the URL from the environment
+        r = redis.from_url(REDIS_URL, decode_responses=True)
+        r.ping() # Test the connection
+        app.logger.info("Successfully connected to Redis.")
+    except Exception as e:
+        app.logger.error(f"Failed to connect to Redis at {REDIS_URL}: {e}", exc_info=True)
+        # r remains None, so endpoints will fail gracefully
 
 # Define a key to store our JSON data in Redis
 REDIS_KEY = "vr_params"
@@ -38,6 +44,7 @@ def update_params():
     Receives JSON and saves it to a Redis key.
     """
     if not r:
+        # This check now handles both connection failure and missing URL
         return jsonify({"error": "Redis connection not available"}), 503
 
     try:
@@ -45,10 +52,7 @@ def update_params():
         if not params:
             return jsonify({"error": "No JSON payload"}), 400
 
-        # Serialize the Python dict to a JSON string before saving
         json_string = json.dumps(params, indent=4)
-        
-        # Save the string to Redis using the SET command
         r.set(REDIS_KEY, json_string)
         
         app.logger.info(f"Successfully wrote params to Redis key: {REDIS_KEY}")
@@ -67,16 +71,13 @@ def get_params():
         return jsonify({"error": "Redis connection not available"}), 503
 
     try:
-        # Get the value (string) from Redis using the GET command
         json_string = r.get(REDIS_KEY)
         
         if json_string:
-            # If the key exists, parse the JSON string back into a Python dict
             params = json.loads(json_string)
             app.logger.info(f"Successfully read params from Redis key: {REDIS_KEY}")
             return jsonify(params)
         else:
-            # If the key doesn't exist, r.get() returns None
             app.logger.warning(f"Key not found in Redis: {REDIS_KEY}, returning default.")
             default_params = {"seed": 1234, "octaves": 4, "period": 20.0, "persistence": 0.8, "status": "redis_key_not_found"}
             return jsonify(default_params)
@@ -85,3 +86,7 @@ def get_params():
         app.logger.error(f"Error in get_params reading from Redis: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
+# Your original test endpoint
+@app.route("/api/python")
+def hello_world():
+    return "<p>Hello, World!</p>"
