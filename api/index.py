@@ -1,89 +1,101 @@
 from flask import Flask, request, jsonify
 import json
 import os
-import redis
-from dotenv import load_dotenv # <-- Import dotenv
+import base64  # <-- Import base64 for key decoding
+import firebase_admin
+from firebase_admin import credentials, db
+from dotenv import load_dotenv
 
-# --- Load environment variables ---
-# This line loads variables from a .env file (if it exists)
-# This is for LOCAL DEVELOPMENT. Vercel uses its own dashboard.
+# Load .env file for local development
 load_dotenv() 
 
 app = Flask(__name__)
 
-# --- Connect to Redis using Environment Variables ---
-# Get the REDIS_URL from the environment.
-# os.environ.get() will return None if the variable is not set.
-REDIS_URL = os.environ.get("REDIS_URL")
+# --- Connect to Firebase ---
+# Get credentials from environment variables
+FIREBASE_DB_URL = os.environ.get("FIREBASE_DATABASE_URL")
+FIREBASE_KEY_BASE64 = os.environ.get("FIREBASE_SERVICE_ACCOUNT_BASE64")
 
-# Initialize Redis client variable
-r = None
+# We will check if the app is initialized before each request
+# This avoids crashing the app on startup if env vars are missing
+try:
+    if not FIREBASE_DB_URL or not FIREBASE_KEY_BASE64:
+        raise ValueError("FIREBASE_DATABASE_URL or FIREBASE_SERVICE_ACCOUNT_BASE64 env vars not set.")
 
-if not REDIS_URL:
-    # If the variable is missing, log a critical error.
-    # The app can't run without it.
-    app.logger.critical("FATAL ERROR: REDIS_URL environment variable is not set.")
-else:
-    try:
-        # Connect using the URL from the environment
-        r = redis.from_url(REDIS_URL, decode_responses=True)
-        r.ping() # Test the connection
-        app.logger.info("Successfully connected to Redis.")
-    except Exception as e:
-        app.logger.error(f"Failed to connect to Redis at {REDIS_URL}: {e}", exc_info=True)
-        # r remains None, so endpoints will fail gracefully
+    # Decode the base64 service account key
+    decoded_key = base64.b64decode(FIREBASE_KEY_BASE64).decode('utf-8')
+    cred_dict = json.loads(decoded_key)
+    
+    # Initialize credentials
+    cred = credentials.Certificate(cred_dict)
+    
+    # Initialize Firebase app
+    firebase_admin.initialize_app(cred, {
+        'databaseURL': FIREBASE_DB_URL
+    })
+    
+    app.logger.info("Successfully connected to Firebase Realtime Database.")
 
-# Define a key to store our JSON data in Redis
-REDIS_KEY = "vr_params"
-# --- End Redis Setup ---
+except Exception as e:
+    app.logger.critical(f"FATAL ERROR: Failed to initialize Firebase: {e}", exc_info=True)
+    # The app will still run, but endpoints will fail
+
+# --- End Firebase Setup ---
 
 
 @app.route("/api/update-params", methods=["POST"])
 def update_params():
     """
-    Receives JSON and saves it to a Redis key.
+    Receives JSON and saves it to a Firebase Realtime Database path.
     """
-    if not r:
-        # This check now handles both connection failure and missing URL
-        return jsonify({"error": "Redis connection not available"}), 503
-
+    if not firebase_admin._DEFAULT_APP:
+         return jsonify({"error": "Firebase connection not available"}), 503
+         
     try:
         params = request.get_json()
         if not params:
             return jsonify({"error": "No JSON payload"}), 400
 
-        json_string = json.dumps(params, indent=4)
-        r.set(REDIS_KEY, json_string)
+        # Get a reference to the path '/vr_params'
+        ref = db.reference("vr_params")
         
-        app.logger.info(f"Successfully wrote params to Redis key: {REDIS_KEY}")
+        # Set the data at that path (this overwrites any existing data)
+        ref.set(params)
+        
+        app.logger.info(f"Successfully wrote params to Firebase path: /vr_params")
         return jsonify({"success": True, "params_saved": params}), 200
 
     except Exception as e:
-        app.logger.error(f"Error in update_params writing to Redis: {e}", exc_info=True)
+        app.logger.error(f"Error in update_params writing to Firebase: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 @app.route("/api/get-params", methods=["GET"])
 def get_params():
     """
-    Attempts to read the parameters from the Redis key.
+    Attempts to read the parameters from the Firebase path.
     """
-    if not r:
-        return jsonify({"error": "Redis connection not available"}), 503
-
+    if not firebase_admin._DEFAULT_APP:
+         return jsonify({"error": "Firebase connection not available"}), 503
+         
     try:
-        json_string = r.get(REDIS_KEY)
+        # Get a reference to the path '/vr_params'
+        ref = db.reference("vr_params")
         
-        if json_string:
-            params = json.loads(json_string)
-            app.logger.info(f"Successfully read params from Redis key: {REDIS_KEY}")
+        # Get the data from the path
+        params = ref.get()
+        
+        if params:
+            # If the path exists, 'params' will be our dictionary
+            app.logger.info(f"Successfully read params from Firebase path: /vr_params")
             return jsonify(params)
         else:
-            app.logger.warning(f"Key not found in Redis: {REDIS_KEY}, returning default.")
-            default_params = {"seed": 1234, "octaves": 4, "period": 20.0, "persistence": 0.8, "status": "redis_key_not_found"}
+            # If the path doesn't exist, ref.get() returns None
+            app.logger.warning(f"Path /vr_params not found in Firebase, returning default.")
+            default_params = {"seed": 1234, "octaves": 4, "period": 20.0, "persistence": 0.8, "status": "firebase_path_not_found"}
             return jsonify(default_params)
 
     except Exception as e:
-        app.logger.error(f"Error in get_params reading from Redis: {e}", exc_info=True)
+        app.logger.error(f"Error in get_params reading from Firebase: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 # Your original test endpoint
