@@ -47,24 +47,36 @@ except Exception as e:
 @app.route("/api/update-params", methods=["POST"])
 def update_params():
     """
-    Receives JSON and saves it to a Firestore document.
+    Receives JSON, adds a timestamp, and saves it to a Firestore document.
     """
     if not firebase_initialized:
-         return jsonify({"error": "Firebase connection not available"}), 503
-         
+          return jsonify({"error": "Firebase connection not available"}), 503
+          
     try:
         params = request.get_json()
         if not params:
             return jsonify({"error": "No JSON payload"}), 400
         
+        # --- MODIFICATION ---
+        # 1. Create a timestamp, just like in /api/submit-prompt
+        timestamp = datetime.utcnow().isoformat()
+        
+        # 2. Add the timestamp directly to the params dictionary
+        #    Any client polling /get-params can now check this field.
+        params["last_updated_timestamp"] = timestamp
+        # --- END MODIFICATION ---
+        
         # Get a reference to the document
         doc_ref = db_client.collection("settings").document("vr_params")
         
         # Set the data in that document (this overwrites)
+        # This will now save the original params + the new timestamp field
         doc_ref.set(params)
         
-        app.logger.info(f"Successfully wrote params to Firestore path: settings/vr_params")
-        return jsonify({"success": True, "params_saved": params}), 200
+        app.logger.info(f"Successfully wrote params to Firestore path: settings/vr_params with timestamp: {timestamp}")
+        
+        # Return the new timestamp in the success response for consistency
+        return jsonify({"success": True, "params_saved": params, "timestamp": timestamp}), 200
     except Exception as e:
         app.logger.error(f"Error in update_params writing to Firestore: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
