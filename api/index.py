@@ -170,6 +170,84 @@ def get_prompt_request():
         app.logger.error(f"Error in get_prompt_request: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
+# In app.py, add this new route:
+
+@app.route("/api/generate-music-and-store", methods=["POST"])
+def generate_music_and_store_endpoint():
+    """
+    Receives a prompt, calls ElevenLabs to generate music, uploads it to 
+    Firebase Storage, and updates the Firestore document with the URL.
+    """
+    if not firebase_initialized or not db_client:
+        return jsonify({"error": "Firebase connection not available"}), 503
+    
+    # 1. Input Validation
+    try:
+        data = request.get_json()
+        scene_prompt = data.get("prompt")
+        elevenlabs_api_key = data.get("api_key") # The Agent passed this secret
+        
+        if not scene_prompt:
+            return jsonify({"error": "No 'prompt' provided"}), 400
+        if not elevenlabs_api_key:
+            return jsonify({"error": "ElevenLabs API Key missing"}), 401
+        if not FIREBASE_STORAGE_BUCKET:
+             return jsonify({"error": "Firebase Storage Bucket not configured"}), 500
+        
+    except Exception as e:
+        app.logger.error(f"Error parsing music request: {e}")
+        return jsonify({"error": "Invalid request payload"}), 400
+        
+    # 2. Generation and Storage Logic
+    try:
+        # Initialize ElevenLabs with the secret passed from the agent
+        client = ElevenLabs(api_key=elevenlabs_api_key)
+        
+        # Define the Music Prompt based on the scene description
+        music_prompt = (
+            f"Generate a 30-second purely instrumental ambient track. "
+            f"Genre: Ethereal and flowing. Mood: Reflect the atmosphere of: {scene_prompt}. "
+            f"Structure: Build to a gentle peak and fade out. Exclude: Vocals."
+        )
+
+        # A. Generate Music (returns audio bytes)
+        audio_bytes = client.music.compose(
+            prompt=music_prompt,
+            music_length_ms=30000,
+        )
+        
+        # B. Upload to Firebase Storage
+        bucket = storage.bucket(FIREBASE_STORAGE_BUCKET)
+        
+        # Create a unique filename
+        filename = f"music/track_{db_client.collection('settings').document('vr_params').id}.mp3"
+        blob = bucket.blob(filename)
+        
+        blob.upload_from_string(
+            data=audio_bytes,
+            content_type="audio/mpeg"
+        )
+        
+        # Make public and get URL
+        blob.make_public()
+        public_url = blob.public_url
+        
+        # C. Update Firestore with the URL (The core decoupling step)
+        # We update the *existing* document that holds the VR parameters
+        doc_ref = db_client.collection("settings").document("vr_params")
+        doc_ref.update({
+            "music_url": public_url,
+            "music_updated_timestamp": datetime.utcnow().isoformat()
+        })
+
+        app.logger.info(f"Music generated and Firestore updated with URL: {public_url}")
+
+        # 3. Return success response
+        return jsonify({"success": True, "music_url": public_url}), 200
+
+    except Exception as e:
+        app.logger.error(f"ElevenLabs or Storage Failure: {e}", exc_info=True)
+        return jsonify({"error": "Failed to generate or upload music to storage"}), 500
 
 @app.route("/api/python")
 def hello_world():
