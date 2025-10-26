@@ -3,7 +3,7 @@ from vercel_kv import KV
 import json
 
 app = Flask(__name__)
-
+kv = KV()
 PARAMS_KEY = "vr_params"
 
 @app.route("/api/update-params", methods=["POST"])
