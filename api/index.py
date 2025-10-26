@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 import json
 import os
-import base64  # <-- Import base64 for key decoding
+import base64
 import firebase_admin
 from firebase_admin import credentials, db
 from dotenv import load_dotenv
@@ -16,8 +16,9 @@ app = Flask(__name__)
 FIREBASE_DB_URL = os.environ.get("FIREBASE_DATABASE_URL")
 FIREBASE_KEY_BASE64 = os.environ.get("FIREBASE_SERVICE_ACCOUNT_BASE64")
 
-# We will check if the app is initialized before each request
-# This avoids crashing the app on startup if env vars are missing
+#  FIX 1: Create a flag to track initialization
+firebase_initialized = False 
+
 try:
     if not FIREBASE_DB_URL or not FIREBASE_KEY_BASE64:
         raise ValueError("FIREBASE_DATABASE_URL or FIREBASE_SERVICE_ACCOUNT_BASE64 env vars not set.")
@@ -34,11 +35,13 @@ try:
         'databaseURL': FIREBASE_DB_URL
     })
     
+    #  FIX 2: Set the flag to True on success
+    firebase_initialized = True
     app.logger.info("Successfully connected to Firebase Realtime Database.")
 
 except Exception as e:
     app.logger.critical(f"FATAL ERROR: Failed to initialize Firebase: {e}", exc_info=True)
-    # The app will still run, but endpoints will fail
+    # The app will still run, but firebase_initialized will remain False
 
 # --- End Firebase Setup ---
 
@@ -48,7 +51,8 @@ def update_params():
     """
     Receives JSON and saves it to a Firebase Realtime Database path.
     """
-    if not firebase_admin._DEFAULT_APP:
+    #  FIX 3: Check our custom flag
+    if not firebase_initialized:
          return jsonify({"error": "Firebase connection not available"}), 503
          
     try:
@@ -74,7 +78,8 @@ def get_params():
     """
     Attempts to read the parameters from the Firebase path.
     """
-    if not firebase_admin._DEFAULT_APP:
+    #  FIX 3 (repeated): Check our custom flag
+    if not firebase_initialized:
          return jsonify({"error": "Firebase connection not available"}), 503
          
     try:
