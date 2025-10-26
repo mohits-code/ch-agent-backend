@@ -44,6 +44,73 @@ except Exception as e:
 # --- End Firebase Setup ---
 
 
+@app.route("/api/update-audio", methods=["POST"])
+def update_audio():
+    """
+    Receives an .mp3 file, uploads it to Firebase Storage,
+    and saves the URL and timestamp to Firestore.
+    """
+    if not firebase_initialized or not storage_bucket:
+        return jsonify({"error": "Firebase connection not available"}), 503
+
+    try:
+        # Check if the 'audio' file is in the request
+        if 'audio' not in request.files:
+            return jsonify({"error": "No 'audio' file part in request"}), 400
+
+        audio_file = request.files['audio']
+        if audio_file.filename == '':
+            return jsonify({"error": "No selected file"}), 400
+
+        # Get metadata from the form
+        prompt_text = request.form.get("prompt", "No prompt provided")
+        
+        # Create a unique filename with the .mp3 extension
+        unique_filename = f"music_{uuid.uuid4()}.mp3"
+        
+        # Define the path in Firebase Storage
+        blob = storage_bucket.blob(f"audio/{unique_filename}")
+
+        app.logger.info(f"Uploading file '{unique_filename}' to Firebase Storage...")
+
+        # Upload the file bytes with the correct mp3 content type
+        blob.upload_from_file(
+            audio_file,
+            content_type='audio/mpeg' # <-- Use audio/mpeg for MP3
+        )
+        
+        # Make the file public so the VR app can access it
+        blob.make_public()
+        public_url = blob.public_url
+        
+        app.logger.info(f"File uploaded. Public URL: {public_url}")
+
+        # --- 3. Save metadata to Firestore ---
+        timestamp = datetime.utcnow().isoformat()
+        doc_ref = db_client.collection("settings").document("latest_audio")
+        doc_ref.set({
+            "url": public_url,
+            "filename": unique_filename,
+            "prompt": prompt_text,
+            "timestamp": timestamp
+        })
+        
+        app.logger.info("Successfully wrote audio metadata to Firestore.")
+        
+        return jsonify({
+            "success": True,
+            "url": public_url,
+            "timestamp": timestamp
+        }), 200
+
+    except Exception as e:
+        app.logger.error(f"Error in update_audio: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+
+
+
 @app.route("/api/update-params", methods=["POST"])
 def update_params():
     """
